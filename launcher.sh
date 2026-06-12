@@ -13,7 +13,7 @@ TEMPLATE_DIR=${TEMPLATE_DIR:-"$PROFILE_DIR/templates"}
 LOG_DIR=${LOG_DIR:-"$MANAGER_ROOT/run-logs"}
 STATE_FILE=${STATE_FILE:-"$LOG_DIR/start-manager.state"}
 STAMP=$(date +%Y%m%d-%H%M%S)
-VERSION=${VERSION:-0.1.5}
+VERSION=${VERSION:-0.1.6}
 
 banner() {
   cat <<EOF

@@ -3,6 +3,17 @@
 This changelog tracks the fork release version for vLLM 2080 Ti Definitive
 Edition. It is separate from the upstream vLLM package version.
 
+## v0.1.6 - 2026-06-12
+
+- Integrates `ENABLE_TOOL_CALLING`, `TOOL_CALL_PARSER`,
+  `VLLM_ENGINE_READY_TIMEOUT_S`, and `OMP_NUM_THREADS` into the launcher menu
+  system, state persistence, profile save/load, and runtime environment export.
+- Sets production defaults matching README.zh-CN.md: `ENFORCE_EAGER=1`,
+  `ENABLE_TOOL_CALLING=1`, `TOOL_CALL_PARSER=qwen3_xml`,
+  `VLLM_ENGINE_READY_TIMEOUT_S=1800`, `OMP_NUM_THREADS=8`.
+- Adds dedicated menu items (Tool calling, Tool parser, Engine timeout,
+  OMP threads) to the runtime parameter overrides screen.
+
 ## v0.1.5 - 2026-06-08
 
 - Renames the public service manager to `launcher.sh` and keeps `build.sh` as
