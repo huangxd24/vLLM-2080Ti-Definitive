@@ -227,6 +227,10 @@ save_manager_state() {
     printf 'DISABLE_PREFIX_CACHING=%q\n' "${DISABLE_PREFIX_CACHING:-}"
     printf 'DISABLE_CUSTOM_ALL_REDUCE=%q\n' "${DISABLE_CUSTOM_ALL_REDUCE:-}"
     printf 'DISABLE_LOG_STATS=%q\n' "${DISABLE_LOG_STATS:-}"
+    printf 'ENABLE_TOOL_CALLING=%q\n' "${ENABLE_TOOL_CALLING:-}"
+    printf 'TOOL_CALL_PARSER=%q\n' "${TOOL_CALL_PARSER:-}"
+    printf 'VLLM_ENGINE_READY_TIMEOUT_S=%q\n' "${VLLM_ENGINE_READY_TIMEOUT_S:-}"
+    printf 'OMP_NUM_THREADS=%q\n' "${OMP_NUM_THREADS:-}"
     printf 'VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=%q\n' "${VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH:-}"
     printf 'MODE=%q\n' "${MODE:-safe}"
     printf 'PORT=%q\n' "${PORT:-8000}"
@@ -1199,6 +1203,10 @@ save_current_profile_menu() {
   write_profile_entry "$target_file.tmp" DISABLE_PREFIX_CACHING "${DISABLE_PREFIX_CACHING:-}"
   write_profile_entry "$target_file.tmp" DISABLE_CUSTOM_ALL_REDUCE "${DISABLE_CUSTOM_ALL_REDUCE:-}"
   write_profile_entry "$target_file.tmp" DISABLE_LOG_STATS "${DISABLE_LOG_STATS:-}"
+  write_profile_entry "$target_file.tmp" ENABLE_TOOL_CALLING "${ENABLE_TOOL_CALLING:-}"
+  write_profile_entry "$target_file.tmp" TOOL_CALL_PARSER "${TOOL_CALL_PARSER:-}"
+  write_profile_entry "$target_file.tmp" VLLM_ENGINE_READY_TIMEOUT_S "${VLLM_ENGINE_READY_TIMEOUT_S:-}"
+  write_profile_entry "$target_file.tmp" OMP_NUM_THREADS "${OMP_NUM_THREADS:-}"
   mv "$target_file.tmp" "$target_file"
 
   PROFILE="$family_dir/user/${safe_name}.env"
@@ -1450,12 +1458,18 @@ edit_advanced_parameters() {
   fi
   LANGUAGE_MODEL_ONLY=$(prompt_toggle01 "Language-model only" "${LANGUAGE_MODEL_ONLY:-1}") || return 0
   SKIP_MM_PROFILING=$(prompt_toggle01 "Skip multimodal profiling" "${SKIP_MM_PROFILING:-1}") || return 0
-  ENFORCE_EAGER=$(prompt_toggle01 "Enforce eager" "${ENFORCE_EAGER:-0}") || return 0
+  ENFORCE_EAGER=$(prompt_toggle01 "Enforce eager" "${ENFORCE_EAGER:-1}") || return 0
   NO_ASYNC_SCHEDULING=$(prompt_toggle01 "No async scheduling" "${NO_ASYNC_SCHEDULING:-0}") || return 0
   DISABLE_HYBRID_KV_CACHE_MANAGER=$(prompt_toggle01 "Disable hybrid KV cache manager" "${DISABLE_HYBRID_KV_CACHE_MANAGER:-0}") || return 0
   DISABLE_PREFIX_CACHING=$(prompt_toggle01 "Disable prefix caching" "${DISABLE_PREFIX_CACHING:-0}") || return 0
   DISABLE_CUSTOM_ALL_REDUCE=$(prompt_toggle01 "Disable custom all-reduce" "${DISABLE_CUSTOM_ALL_REDUCE:-0}") || return 0
   DISABLE_LOG_STATS=$(prompt_toggle01 "Disable log stats" "${DISABLE_LOG_STATS:-0}") || return 0
+  ENABLE_TOOL_CALLING=$(prompt_toggle01 "Enable tool calling" "${ENABLE_TOOL_CALLING:-1}") || return 0
+  if [[ "${ENABLE_TOOL_CALLING:-1}" == "1" ]]; then
+    TOOL_CALL_PARSER=$(prompt_optional "Tool call parser (e.g. qwen3_xml, hermes)" "${TOOL_CALL_PARSER:-qwen3_xml}") || return 0
+  fi
+  VLLM_ENGINE_READY_TIMEOUT_S=$(prompt_optional "Engine ready timeout seconds" "${VLLM_ENGINE_READY_TIMEOUT_S:-1800}") || return 0
+  OMP_NUM_THREADS=$(prompt_optional "OMP threads" "${OMP_NUM_THREADS:-8}") || return 0
 }
 
 edit_runtime_parameters() {
@@ -1541,7 +1555,7 @@ runtime_parameter_menu() {
   local model_family_value profile_group_value model_variant_value served_name_value
   local quantization_value kv_value context_value gpu_util_value
   local batch_tokens_value max_sequences_value mtp_value message_type_value
-  local template_value reasoning_value
+  local template_value reasoning_value tool_calling_value tool_parser_value engine_timeout_value omp_threads_value
 
   while true; do
     model_family_value=$(menu_value "${MODEL_FAMILY:-$(guess_model_family "${MODEL_DIR:-}")}")
@@ -1558,6 +1572,10 @@ runtime_parameter_menu() {
     message_type_value=$(menu_value "${MESSAGE_TYPE:-text-only}")
     template_value=$(menu_value "$(current_template_label)")
     reasoning_value=$(menu_value "$(current_reasoning_label)")
+    tool_calling_value=$(menu_value "${ENABLE_TOOL_CALLING:-0}")
+    tool_parser_value=$(menu_value "${TOOL_CALL_PARSER:-}")
+    engine_timeout_value=$(menu_value "${VLLM_ENGINE_READY_TIMEOUT_S:-}")
+    omp_threads_value=$(menu_value "${OMP_NUM_THREADS:-}")
 
     if is_tty; then
       clear >/dev/tty 2>/dev/null || true
@@ -1580,6 +1598,10 @@ runtime_parameter_menu() {
       "Message type: $message_type_value"
       "Chat template: $template_value"
       "Reasoning defaults: $reasoning_value"
+      "Tool calling: $tool_calling_value"
+      "Tool parser: $tool_parser_value"
+      "Engine timeout: $engine_timeout_value"
+      "OMP threads: $omp_threads_value"
       "Advanced options"
       "Edit all fields"
       "Return"
@@ -1637,6 +1659,28 @@ runtime_parameter_menu() {
         ;;
       "Reasoning defaults:"*)
         edit_reasoning_defaults_menu
+        ;;
+      "Tool calling:"*)
+        ENABLE_TOOL_CALLING=$(prompt_toggle01 "Enable tool calling" "${ENABLE_TOOL_CALLING:-1}") || continue
+        if [[ "${ENABLE_TOOL_CALLING:-1}" == "1" && -z "${TOOL_CALL_PARSER:-}" ]]; then
+          TOOL_CALL_PARSER=$(prompt_optional "Tool call parser (e.g. qwen3_xml, hermes)" "${TOOL_CALL_PARSER:-qwen3_xml}") || true
+        fi
+        save_manager_state
+        ;;
+      "Tool parser:"*)
+        TOOL_CALL_PARSER=$(prompt_optional "Tool call parser (e.g. qwen3_xml, hermes)" "${TOOL_CALL_PARSER:-qwen3_xml}") || continue
+        if [[ -n "${TOOL_CALL_PARSER:-}" ]]; then
+          ENABLE_TOOL_CALLING=1
+        fi
+        save_manager_state
+        ;;
+      "Engine timeout:"*)
+        VLLM_ENGINE_READY_TIMEOUT_S=$(prompt_optional "Engine ready timeout seconds (empty=default)" "${VLLM_ENGINE_READY_TIMEOUT_S:-1800}") || continue
+        save_manager_state
+        ;;
+      "OMP threads:"*)
+        OMP_NUM_THREADS=$(prompt_optional "OMP threads" "${OMP_NUM_THREADS:-8}") || continue
+        save_manager_state
         ;;
       "Advanced options")
         edit_advanced_parameters
@@ -2093,6 +2137,12 @@ set_sm75_runtime_env() {
   else
     unset VLLM_DEFAULT_THINKING_TOKEN_BUDGET
   fi
+  if [[ -n "${VLLM_ENGINE_READY_TIMEOUT_S:-}" ]]; then
+    export VLLM_ENGINE_READY_TIMEOUT_S
+  fi
+  if [[ -n "${OMP_NUM_THREADS:-}" ]]; then
+    export OMP_NUM_THREADS
+  fi
 }
 
 build_args() {
@@ -2128,6 +2178,8 @@ build_args() {
   [[ -n "${DEFAULT_CHAT_TEMPLATE_KWARGS:-}" ]] && VLLM_ARGS+=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS")
   [[ -n "${ADDITIONAL_CONFIG_JSON:-}" ]] && VLLM_ARGS+=(--additional-config "$ADDITIONAL_CONFIG_JSON")
   [[ -n "${HF_OVERRIDES_JSON:-}" ]] && VLLM_ARGS+=(--hf-overrides "$HF_OVERRIDES_JSON")
+  [[ "${ENABLE_TOOL_CALLING:-0}" == "1" ]] && VLLM_ARGS+=(--enable-auto-tool-choice)
+  [[ -n "${TOOL_CALL_PARSER:-}" ]] && VLLM_ARGS+=(--tool-call-parser "$TOOL_CALL_PARSER")
 
   if [[ -n "${MM_LIMIT_JSON:-}" ]]; then
     VLLM_ARGS+=(--limit-mm-per-prompt "$MM_LIMIT_JSON")
@@ -2519,6 +2571,11 @@ prepare_runtime_defaults() {
     LANGUAGE_MODEL_ONLY=1
     SKIP_MM_PROFILING=1
   fi
+  ENFORCE_EAGER=${ENFORCE_EAGER:-1}
+  ENABLE_TOOL_CALLING=${ENABLE_TOOL_CALLING:-1}
+  TOOL_CALL_PARSER=${TOOL_CALL_PARSER:-qwen3_xml}
+  VLLM_ENGINE_READY_TIMEOUT_S=${VLLM_ENGINE_READY_TIMEOUT_S:-1800}
+  OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
   validate_mode_kv_policy
 }
 
@@ -2554,6 +2611,10 @@ Launch summary:
   Message type:         $message_type
   Chat template:        $(current_template_label)
   Reasoning default:    $(current_reasoning_label)
+  Tool calling:         ${ENABLE_TOOL_CALLING:-0}
+  Tool parser:          ${TOOL_CALL_PARSER:-<none>}
+  Engine timeout:       ${VLLM_ENGINE_READY_TIMEOUT_S:-default}
+  OMP threads:          ${OMP_NUM_THREADS:-8}
   Mode:                 $MODE
   MTP graph policy:     VLLM_SM75_SPEC_SYNC_MODE=${VLLM_SM75_SPEC_SYNC_MODE:-auto}, VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=${VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH:-0}
   Port:                 $PORT
@@ -2646,6 +2707,10 @@ render_main_menu() {
   printf '     Message type:     %s\n' "$(menu_value "${MESSAGE_TYPE:-text-only}")"
   printf '     Chat template:    %s\n' "$(menu_value "$(current_template_label)")"
   printf '     Reasoning:        %s\n' "$(menu_value "$(current_reasoning_label)")"
+  printf '     Tool calling:     %s\n' "$(menu_value "${ENABLE_TOOL_CALLING:-0}")"
+  printf '     Tool parser:      %s\n' "$(menu_value "${TOOL_CALL_PARSER:-}")"
+  printf '     Engine timeout:   %s\n' "$(menu_value "${VLLM_ENGINE_READY_TIMEOUT_S:-}")"
+  printf '     OMP threads:      %s\n' "$(menu_value "${OMP_NUM_THREADS:-}")"
   render_main_menu_item 3 "$current" "3. GPU/TP setting:  $(menu_value "$gpu_devices") / TP $(menu_value "$tp_size")"
   render_main_menu_item 4 "$current" "4. Launch mode:      ${MODE:-safe}"
   render_main_menu_item 5 "$current" "5. Port:             ${PORT:-8000}"

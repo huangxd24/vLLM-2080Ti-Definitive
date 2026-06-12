@@ -259,3 +259,19 @@ fork，遵循 Apache-2.0 license。仓库保留上游项目结构，并加入面
 - FlashAttention / FA2、TurboQuant、Marlin、CUTLASS、Triton 以及 vLLM
   相关加速 kernel：这些都是已有开源加速工作，本项目将它们整合、适配并在
   目标硬件上验证。
+
+
+启动命令：
+conda activate vllm2080ti
+export CUDA_HOME=/home/david/miniconda3/envs/vllm2080ti
+export TORCH_CUDA_ARCH_LIST=7.5
+export MAX_JOBS=8
+./build.sh
+
+export VLLM_ENGINE_READY_TIMEOUT_S=1800
+export ENABLE_TOOL_CALLING=1
+export TOOL_CALL_PARSER=qwen3_xml
+export ENFORCE_EAGER=1
+export GPU_UTIL=0.9034
+./launcher.sh
+
