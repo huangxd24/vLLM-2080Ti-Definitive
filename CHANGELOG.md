@@ -21,6 +21,8 @@ Edition. It is separate from the upstream vLLM package version.
   on SM75 that crash the engine during MTP rejection sampling.
 - Filters `fp16` from `--kv-cache-dtype` argument since vLLM CLI only accepts
   `float16`; the launcher now treats `fp16` and empty as "use default".
+- Sets `ENFORCE_EAGER=0` and `MAX_BATCHED_TOKENS=4096` in the MTP3 user
+  profile to enable CUDAGraph decode acceleration and faster prefill chunking.
 - Renames profile directory `qwen27b` to `qwopus36-27b` to align with model
   short name; updates all PROFILE_GROUP, SERVED_NAME, README, docs, and state
   file references.
