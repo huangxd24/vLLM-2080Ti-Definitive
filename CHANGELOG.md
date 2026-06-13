@@ -5,6 +5,22 @@ Edition. It is separate from the upstream vLLM package version.
 
 ## v0.1.7 - 2026-06-13
 
+- Explicitly passes `--enable-prefix-caching` by default so vLLM caches shared
+  KV prefixes (system prompt, tool definitions) across Hermes multi-turn
+  requests; set `DISABLE_PREFIX_CACHING=1` to opt out.
+- Increases smoke-test `max_tokens` from 8 to 64 so the startup warmup covers
+  more Triton decode-kernel shapes, reducing first-request JIT latency spikes.
+- Adds user profile `qwen27b-fp8-fp16kv-64K-mtp3-text-only` with MTP_K=3
+  and explicit `KV_CACHE_DTYPE=fp16` to properly override stale INT8 KV state
+  from previous profiles when switching.
+- Fixes `CUDA_HOME` detection to fall back to conda-env `nvcc` when
+  `/usr/local/cuda-12.8` and `/usr/local/cuda` do not exist, preventing
+  FlashInfer JIT compilation failures during MTP startup.
+- Disables FlashInfer top-k/top-p sampler by default
+  (`VLLM_USE_FLASHINFER_SAMPLER=0`) to avoid runtime JIT compilation timeouts
+  on SM75 that crash the engine during MTP rejection sampling.
+- Filters `fp16` from `--kv-cache-dtype` argument since vLLM CLI only accepts
+  `float16`; the launcher now treats `fp16` and empty as "use default".
 - Renames profile directory `qwen27b` to `qwopus36-27b` to align with model
   short name; updates all PROFILE_GROUP, SERVED_NAME, README, docs, and state
   file references.

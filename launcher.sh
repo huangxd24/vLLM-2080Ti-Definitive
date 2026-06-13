@@ -2196,6 +2196,14 @@ set_sm75_runtime_env() {
   if [[ ! -x "$CUDA_HOME/bin/nvcc" && -x /usr/local/cuda/bin/nvcc ]]; then
     export CUDA_HOME=/usr/local/cuda
   fi
+  if [[ ! -x "$CUDA_HOME/bin/nvcc" ]]; then
+    # Fall back to conda environment nvcc
+    local conda_nvcc
+    conda_nvcc=$(command -v nvcc 2>/dev/null || true)
+    if [[ -n "$conda_nvcc" ]]; then
+      export CUDA_HOME=$(dirname "$(dirname "$conda_nvcc")")
+    fi
+  fi
   export CUDA_PATH="$CUDA_HOME"
   export CUDACXX="$CUDA_HOME/bin/nvcc"
   export TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-7.5}
@@ -2217,6 +2225,7 @@ set_sm75_runtime_env() {
   export PYTHONPATH="$RUNTIME_ROOT${FLASHQLA_ROOT:+:$FLASHQLA_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
   export PATH="$RUNTIME_ROOT/.venv/bin:${CUDA_HOME}/bin:$PATH"
   export FLASHINFER_ENABLE_AOT=${FLASHINFER_ENABLE_AOT:-1}
+  export VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}
   # Keep generated kernels inside this runtime tree. Reusing cache dirs from
   # experiment worktrees can leave absolute paths to deleted environments.
   export TORCHINDUCTOR_CACHE_DIR="$MANAGER_ROOT/torchinductor-cache"
@@ -2254,11 +2263,17 @@ build_args() {
   )
 
   [[ -n "${QUANTIZATION:-}" ]] && VLLM_ARGS+=(--quantization "$QUANTIZATION")
-  [[ -n "${KV_CACHE_DTYPE:-}" ]] && VLLM_ARGS+=(--kv-cache-dtype "$KV_CACHE_DTYPE")
+  if [[ -n "${KV_CACHE_DTYPE:-}" && "${KV_CACHE_DTYPE}" != "fp16" ]]; then
+    VLLM_ARGS+=(--kv-cache-dtype "$KV_CACHE_DTYPE")
+  fi
   [[ "${ENFORCE_EAGER:-0}" == "1" ]] && VLLM_ARGS+=(--enforce-eager)
   [[ "${NO_ASYNC_SCHEDULING:-0}" == "1" ]] && VLLM_ARGS+=(--no-async-scheduling)
   [[ "${DISABLE_HYBRID_KV_CACHE_MANAGER:-0}" == "1" ]] && VLLM_ARGS+=(--disable-hybrid-kv-cache-manager)
-  [[ "${DISABLE_PREFIX_CACHING:-0}" == "1" ]] && VLLM_ARGS+=(--no-enable-prefix-caching)
+  if [[ "${DISABLE_PREFIX_CACHING:-0}" == "1" ]]; then
+    VLLM_ARGS+=(--no-enable-prefix-caching)
+  else
+    VLLM_ARGS+=(--enable-prefix-caching)
+  fi
   [[ "${LANGUAGE_MODEL_ONLY:-0}" == "1" ]] && VLLM_ARGS+=(--language-model-only)
   [[ "${SKIP_MM_PROFILING:-0}" == "1" ]] && VLLM_ARGS+=(--skip-mm-profiling)
   [[ "${DISABLE_CUSTOM_ALL_REDUCE:-0}" == "1" ]] && VLLM_ARGS+=(--disable-custom-all-reduce)
@@ -2499,7 +2514,7 @@ host, port, model_id = sys.argv[1], sys.argv[2], sys.argv[3]
 payload = {
     "model": model_id,
     "messages": [{"role": "user", "content": "Reply with OK."}],
-    "max_tokens": 8,
+    "max_tokens": 64,
     "temperature": 0,
 }
 req = urllib.request.Request(
