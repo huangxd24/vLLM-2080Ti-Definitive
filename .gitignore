@@ -59,6 +59,8 @@ csrc/cpu/cpu_attn_dispatch_generated.h
 csrc/moe/marlin_moe_wna16/kernel_*
 
 # Local tool/editor files
+torchinductor-cache/
+triton-cache/
 .DS_Store
 .omx/
 backups/
@@ -74,9 +76,3 @@ backups/
 .cursor/
 *.swp
 *.swo
-
-# other
-torchinductor-cache/
-triton-cache/
-run-logs/
-
