@@ -152,7 +152,7 @@ A successful launch prints an OpenAI-compatible API URL. For scripted use:
 
 ```bash
 MODEL_DIR=/path/to/qwen-or-gemma-checkpoint \
-PROFILE=qwen27b/safe/int4/fp16kv-256K-mtp3-text-only.env \
+PROFILE=qwopus36-27b/safe/int4/fp16kv-256K-mtp3-text-only.env \
 MODE=safe \
 PORT=8000 \
 SERVICE_SCOPE=lan \
@@ -168,8 +168,8 @@ mode; the launcher validates that choice against the profile.
 
 Start from [Profile Guide](profiles/README.md). Profiles are organized as
 `profiles/<model>/<mode>/<weight>/<route>.env`, for example
-`qwen27b/safe/fp8/fp16kv-128K-mtp3-text-only.env` and
-`qwen27b/fast/int4/int8kv-256K-mtp3-text-only.env`.
+`qwopus36-27b/safe/fp8/fp16kv-128K-mtp3-text-only.env` and
+`qwopus36-27b/fast/int4/int8kv-256K-mtp3-text-only.env`.
 
 KV precision is positioned as: FP16/default KV for quality, INT8 KV for the
 balanced route, and TQ4NC for compression. TQK8V4 is not a formal route right
@@ -185,7 +185,7 @@ Mode names are intentionally simple:
   higher memory and quality risk.
 
 Experimental profiles live under each model directory, such as
-`profiles/qwen27b/experimental/fp8/`. The launcher hides experimental routes
+`profiles/qwopus36-27b/experimental/fp8/`. The launcher hides experimental routes
 by default unless you point Profile directory at that subdirectory or set
 `PROFILE_INCLUDE_EXPERIMENTAL=1`.
 

@@ -3,6 +3,21 @@
 This changelog tracks the fork release version for vLLM 2080 Ti Definitive
 Edition. It is separate from the upstream vLLM package version.
 
+## v0.1.7 - 2026-06-13
+
+- Renames profile directory `qwen27b` to `qwopus36-27b` to align with model
+  short name; updates all PROFILE_GROUP, SERVED_NAME, README, docs, and state
+  file references.
+- Adds weight directory auto-discovery: `select_weight_dir` now scans
+  `MODEL_SEARCH_PATHS` for model directories and presents a list selector
+  with manual-path fallback.
+- Restructures profile selection into a two-level menu: model group first,
+  then profiles within the chosen group.
+- Adds profile-model consistency check that warns when a profile's model
+  family or group does not match the current weight directory.
+- Simplifies main menu layout: condenses runtime and tool settings into
+  two summary lines, shows weight directory basename instead of full path.
+
 ## v0.1.6 - 2026-06-12
 
 - Integrates `ENABLE_TOOL_CALLING`, `TOOL_CALL_PARSER`,
@@ -13,6 +28,9 @@ Edition. It is separate from the upstream vLLM package version.
   `VLLM_ENGINE_READY_TIMEOUT_S=1800`, `OMP_NUM_THREADS=8`.
 - Adds dedicated menu items (Tool calling, Tool parser, Engine timeout,
   OMP threads) to the runtime parameter overrides screen.
+- Adds `Qwopus3.5-9B-Code` profile under
+  `profiles/qwopus35-9b-code/safe/fp16/fp16kv-128K-nomtp-text-only.env`
+  with FP16 KV, 128K context, text-only, and tool calling enabled.
 
 ## v0.1.5 - 2026-06-08
 

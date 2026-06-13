@@ -36,7 +36,7 @@ are not capacity evidence.
   FP16/default KV with MTP; quantized KV in safe mode must use noMTP. Normal is
   available as a middle diagnostic mode for compatible profiles.
 - Experimental snippets live under each model directory, for example
-  `profiles/qwen27b/experimental/fp8/`.
+  `profiles/qwopus36-27b/experimental/fp8/`.
 - Gemma profiles remain experimental. The currently validated noMTP FP16 route
   can run 64K but is slow/repetitive; INT8 KV and TurboQuant 256K routes are not
   promoted.

@@ -13,7 +13,7 @@ TEMPLATE_DIR=${TEMPLATE_DIR:-"$PROFILE_DIR/templates"}
 LOG_DIR=${LOG_DIR:-"$MANAGER_ROOT/run-logs"}
 STATE_FILE=${STATE_FILE:-"$LOG_DIR/start-manager.state"}
 STAMP=$(date +%Y%m%d-%H%M%S)
-VERSION=${VERSION:-0.1.6}
+VERSION=${VERSION:-0.1.7}
 
 banner() {
   cat <<EOF
@@ -190,6 +190,7 @@ save_manager_state() {
   mkdir -p "$LOG_DIR"
   {
     printf 'MODEL_DIR=%q\n' "${MODEL_DIR:-}"
+    printf 'MODEL_SEARCH_PATHS=%q\n' "${MODEL_SEARCH_PATHS:-/home/david/work/models}"
     printf 'PROFILE_DIR=%q\n' "${PROFILE_DIR:-}"
     printf 'TEMPLATE_DIR=%q\n' "${TEMPLATE_DIR:-}"
     printf 'PROFILE=%q\n' "${PROFILE:-}"
@@ -241,6 +242,21 @@ save_manager_state() {
     printf 'LAST_API_LAN=%q\n' "${LAST_API_LAN:-}"
     printf 'LAST_SMOKE_OUTPUT=%q\n' "${LAST_SMOKE_OUTPUT:-}"
   } > "$STATE_FILE"
+}
+
+list_profile_groups() {
+  [[ -d "$PROFILE_DIR" ]] || return 0
+  find "$PROFILE_DIR" -mindepth 1 -maxdepth 1 -type d ! -name templates ! -name user -printf '%f\n' | sort
+}
+
+list_profiles_in_group() {
+  local group=$1
+  [[ -d "$PROFILE_DIR/$group" ]] || return 0
+  find "$PROFILE_DIR/$group" -type f -name '*.env' -printf '%P\n' |
+    awk -v include_experimental="${PROFILE_INCLUDE_EXPERIMENTAL:-0}" '
+      include_experimental == "1" || $0 !~ /(^|\/)experimental\//
+    ' |
+    sort
 }
 
 list_profiles() {
@@ -319,7 +335,7 @@ profile_family_dir() {
   fi
   case "${MODEL_FAMILY:-}" in
     gemma*) echo gemma31b ;;
-    qwen*|"") echo qwen27b ;;
+    qwen*|"") echo qwopus36-27b ;;
     *)
       printf '%s\n' "${MODEL_FAMILY//[^A-Za-z0-9_.-]/-}"
       ;;
@@ -937,27 +953,32 @@ show_profiles() {
   banner
   echo "Profile presets:"
   echo
-  local profile profile_file family variant mode kv context mtp seqs
+  local profile profile_file family variant mode kv context mtp seqs group
   if [[ ! -d "$PROFILE_DIR" ]]; then
     echo "No profile directory found: $PROFILE_DIR"
     echo
     pause_enter
     return 0
   fi
-  while IFS= read -r profile; do
-    [[ -n "$profile" ]] || continue
-    profile_file="$PROFILE_DIR/$profile"
-    family=$(read_profile_value "$profile_file" MODEL_FAMILY)
-    variant=$(read_profile_value "$profile_file" MODEL_VARIANT)
-    mode=$(read_profile_value "$profile_file" COMPATIBLE_MODES)
-    [[ -n "$mode" ]] || mode=$(read_profile_value "$profile_file" MODE)
-    kv=$(read_profile_value "$profile_file" KV_CACHE_DTYPE)
-    context=$(read_profile_value "$profile_file" MAX_MODEL_LEN)
-    mtp=$(read_profile_value "$profile_file" MTP_K)
-    seqs=$(read_profile_value "$profile_file" MAX_NUM_SEQS)
-    printf '  %-62s compatible=%-12s family=%-7s weight=%-6s kv=%-24s ctx=%-8s mtp=%-3s seqs=%s\n' \
-      "$profile" "${mode:-safe,normal,fast}" "${family:-auto}" "${variant:-auto}" "${kv:-fp16}" "${context:-auto}" "${mtp:-0}" "${seqs:-1}"
-  done < <(list_profiles)
+  while IFS= read -r group; do
+    [[ -n "$group" ]] || continue
+    echo "=== $group ==="
+    while IFS= read -r profile; do
+      [[ -n "$profile" ]] || continue
+      profile_file="$PROFILE_DIR/$group/$profile"
+      family=$(read_profile_value "$profile_file" MODEL_FAMILY)
+      variant=$(read_profile_value "$profile_file" MODEL_VARIANT)
+      mode=$(read_profile_value "$profile_file" COMPATIBLE_MODES)
+      [[ -n "$mode" ]] || mode=$(read_profile_value "$profile_file" MODE)
+      kv=$(read_profile_value "$profile_file" KV_CACHE_DTYPE)
+      context=$(read_profile_value "$profile_file" MAX_MODEL_LEN)
+      mtp=$(read_profile_value "$profile_file" MTP_K)
+      seqs=$(read_profile_value "$profile_file" MAX_NUM_SEQS)
+      printf '    %-55s compatible=%-12s weight=%-6s kv=%-24s ctx=%-8s mtp=%-3s seqs=%s\n' \
+        "$profile" "${mode:-safe,normal,fast}" "${variant:-auto}" "${kv:-fp16}" "${context:-auto}" "${mtp:-0}" "${seqs:-1}"
+    done < <(list_profiles_in_group "$group")
+    echo
+  done < <(list_profile_groups)
   echo
   pause_enter
 }
@@ -1097,9 +1118,41 @@ select_gpu_devices_menu() {
   done
 }
 
+discover_model_dirs() {
+  local search_paths=${MODEL_SEARCH_PATHS:-/home/david/work/models}
+  local dir
+  IFS=':' read -r -a paths <<< "$search_paths"
+  for dir in "${paths[@]}"; do
+    [[ -d "$dir" ]] || continue
+    find "$dir" -maxdepth 2 -mindepth 1 -type d \( -name '.cache' -o -name '.venv' -o -name '.*' \) -prune -o -type d -print 2>/dev/null |
+      while IFS= read -r candidate; do
+        if [[ -f "$candidate/config.json" ]] || ls "$candidate"/*.safetensors >/dev/null 2>&1; then
+          printf '%s\n' "$candidate"
+        fi
+      done
+  done | sort -u
+}
+
 select_weight_dir() {
-  local selected
-  selected=$(prompt_required_dir "Weight/checkpoint directory" "${MODEL_DIR:-}") || return 0
+  local dirs=() choices=() selected
+  mapfile -t dirs < <(discover_model_dirs)
+  if ((${#dirs[@]} == 0)); then
+    selected=$(prompt_required_dir "Weight/checkpoint directory" "${MODEL_DIR:-}") || return 0
+  else
+    choices=("${dirs[@]}" "manual path" "change search path")
+    selected=$(menu_select "Weight directory" "${MODEL_DIR:-${dirs[0]}}" "${choices[@]}") || return 0
+    case "$selected" in
+      "manual path")
+        selected=$(prompt_required_dir "Weight/checkpoint directory" "${MODEL_DIR:-}") || return 0
+        ;;
+      "change search path")
+        MODEL_SEARCH_PATHS=$(prompt_default "Search paths (colon-separated)" "${MODEL_SEARCH_PATHS:-/home/david/work/models}") || return 0
+        save_manager_state
+        select_weight_dir
+        return 0
+        ;;
+    esac
+  fi
   MODEL_DIR="$selected"
   MODEL_FAMILY=$(guess_model_family "$MODEL_DIR")
   QUANTIZATION=$(guess_quantization "$MODEL_DIR")
@@ -1107,23 +1160,59 @@ select_weight_dir() {
   save_manager_state
 }
 
-apply_profile_preset_menu() {
-  local profiles=() selected profile_file choices=() compatible_modes
-  mapfile -t profiles < <(list_profiles)
-  if ((${#profiles[@]} == 0)); then
-    echo "No .env profiles found under $PROFILE_DIR."
-    echo
-    pause_enter
-    return 0
+check_profile_model_match() {
+  local profile_file=$1
+  local profile_family current_family profile_group
+  profile_family=$(read_profile_value "$profile_file" MODEL_FAMILY)
+  profile_group=$(read_profile_value "$profile_file" PROFILE_GROUP)
+  current_family=$(guess_model_family "${MODEL_DIR:-}")
+  if [[ -n "$profile_family" && -n "$current_family" ]]; then
+    if [[ "$profile_family" != "$current_family" ]]; then
+      echo "WARNING: profile model family '$profile_family' does not match current model '$current_family'."
+      echo
+    fi
   fi
-  choices=("Return" "${profiles[@]}")
-  selected=$(menu_select "Profile preset" "${PROFILE:-Return}" "${choices[@]}") || return 0
-  case "$selected" in
-    "Return")
+  if [[ -n "$profile_group" && -n "${MODEL_DIR:-}" ]]; then
+    local model_basename
+    model_basename=$(basename "$MODEL_DIR")
+    if [[ -n "$profile_group" && "$profile_group" != *"${model_basename,,}"* && "${model_basename,,}" != *"${profile_group}"* ]]; then
+      echo "NOTE: profile group '$profile_group' may not match model '$model_basename'."
+      echo
+    fi
+  fi
+}
+
+apply_profile_preset_menu() {
+  local groups=() profiles=() selected profile_file choices=() compatible_modes group
+  mapfile -t groups < <(list_profile_groups)
+  if ((${#groups[@]} == 0)); then
+    mapfile -t profiles < <(list_profiles)
+    if ((${#profiles[@]} == 0)); then
+      echo "No .env profiles found under $PROFILE_DIR."
+      echo
+      pause_enter
       return 0
-      ;;
-  esac
-  PROFILE="$selected"
+    fi
+    choices=("Return" "${profiles[@]}")
+    selected=$(menu_select "Profile preset" "${PROFILE:-Return}" "${choices[@]}") || return 0
+    [[ "$selected" == "Return" ]] && return 0
+    PROFILE="$selected"
+  else
+    choices=("Return" "${groups[@]}")
+    group=$(menu_select "Model group" "Return" "${choices[@]}") || return 0
+    [[ "$group" == "Return" ]] && return 0
+    mapfile -t profiles < <(list_profiles_in_group "$group")
+    if ((${#profiles[@]} == 0)); then
+      echo "No profiles found under $group."
+      echo
+      pause_enter
+      return 0
+    fi
+    choices=("Return" "${profiles[@]}")
+    selected=$(menu_select "Profile [$group]" "Return" "${choices[@]}") || return 0
+    [[ "$selected" == "Return" ]] && { apply_profile_preset_menu; return 0; }
+    PROFILE="$group/$selected"
+  fi
   profile_file="$PROFILE_DIR/$PROFILE"
   if is_tty; then
     clear >/dev/tty 2>/dev/null || true
@@ -1133,6 +1222,7 @@ apply_profile_preset_menu() {
   echo
   profile_summary "$profile_file"
   echo
+  check_profile_model_match "$profile_file"
   echo "Profile applied. Use \"Edit current runtime parameters\" if you want to override fields."
   echo
   apply_profile_overrides "$profile_file"
@@ -2693,24 +2783,21 @@ render_main_menu() {
   echo "Main menu"
   echo
   render_service_status
-  render_main_menu_item 1 "$current" "1. Weight directory: $(menu_value "${MODEL_DIR:-}")"
+  render_main_menu_item 1 "$current" "1. Weight directory: ${MODEL_DIR:+$(basename "$MODEL_DIR")}${MODEL_DIR:-<unset>}"
   render_main_menu_item 2 "$current" "2. Profile:          $(current_profile_label)"
   printf '     Model family:     %s\n' "$(menu_value "${MODEL_FAMILY:-}")"
   printf '     Served name:      %s\n' "$(menu_value "${SERVED_NAME:-}")"
   printf '     Weight quant:     %s\n' "$(menu_value "${QUANTIZATION:-auto}")"
   printf '     KV precision:     %s\n' "$(menu_value "${KV_CACHE_DTYPE:-fp16}")"
   printf '     Context tokens:   %s\n' "$(menu_value "${MAX_MODEL_LEN:-$(default_context_tokens)}")"
-  printf '     GPU util:         %s\n' "$(menu_value "${GPU_UTIL:-$(default_gpu_util)}")"
-  printf '     Batch tokens:     %s\n' "$(menu_value "${MAX_BATCHED_TOKENS:-2048}")"
-  printf '     Max sequences:    %s\n' "$(menu_value "${MAX_NUM_SEQS:-1}")"
   printf '     MTP tokens:       %s\n' "$(menu_value "${MTP_K:-0}")"
   printf '     Message type:     %s\n' "$(menu_value "${MESSAGE_TYPE:-text-only}")"
-  printf '     Chat template:    %s\n' "$(menu_value "$(current_template_label)")"
-  printf '     Reasoning:        %s\n' "$(menu_value "$(current_reasoning_label)")"
-  printf '     Tool calling:     %s\n' "$(menu_value "${ENABLE_TOOL_CALLING:-0}")"
-  printf '     Tool parser:      %s\n' "$(menu_value "${TOOL_CALL_PARSER:-}")"
-  printf '     Engine timeout:   %s\n' "$(menu_value "${VLLM_ENGINE_READY_TIMEOUT_S:-}")"
-  printf '     OMP threads:      %s\n' "$(menu_value "${OMP_NUM_THREADS:-}")"
+  printf '     [Runtime] GPU util=%s batch=%s seqs=%s template=%s reasoning=%s\n' \
+    "${GPU_UTIL:-$(default_gpu_util)}" "${MAX_BATCHED_TOKENS:-2048}" "${MAX_NUM_SEQS:-1}" \
+    "$(current_template_label)" "$(current_reasoning_label)"
+  printf '     [Tools]   calling=%s parser=%s timeout=%s omp=%s\n' \
+    "${ENABLE_TOOL_CALLING:-1}" "${TOOL_CALL_PARSER:-<none>}" \
+    "${VLLM_ENGINE_READY_TIMEOUT_S:-1800}" "${OMP_NUM_THREADS:-8}"
   render_main_menu_item 3 "$current" "3. GPU/TP setting:  $(menu_value "$gpu_devices") / TP $(menu_value "$tp_size")"
   render_main_menu_item 4 "$current" "4. Launch mode:      ${MODE:-safe}"
   render_main_menu_item 5 "$current" "5. Port:             ${PORT:-8000}"

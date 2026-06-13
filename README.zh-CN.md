@@ -151,7 +151,7 @@ AutoRound INT8 是实验 checkpoint 路线。
 
 ```bash
 MODEL_DIR=/path/to/qwen-or-gemma-checkpoint \
-PROFILE=qwen27b/safe/int4/fp16kv-256K-mtp3-text-only.env \
+PROFILE=qwopus36-27b/safe/int4/fp16kv-256K-mtp3-text-only.env \
 MODE=safe \
 PORT=8000 \
 SERVICE_SCOPE=lan \
@@ -166,8 +166,8 @@ Profile 只声明兼容模式，不再提供推荐启动模式。需要指定模
 
 从 [Profile 导引](profiles/README.zh-CN.md) 开始选。Profile 按
 `profiles/<model>/<mode>/<weight>/<route>.env` 组织，例如
-`qwen27b/safe/fp8/fp16kv-128K-mtp3-text-only.env` 和
-`qwen27b/fast/int4/int8kv-256K-mtp3-text-only.env`。
+`qwopus36-27b/safe/fp8/fp16kv-128K-mtp3-text-only.env` 和
+`qwopus36-27b/fast/int4/int8kv-256K-mtp3-text-only.env`。
 
 KV 精度按这个口径理解：FP16/default KV 是质量路线，INT8 KV 是平衡路线，
 TQ4NC 是压缩路线。TQK8V4 目前没有在已验证 profile 中体现出优于 INT8 KV
@@ -181,7 +181,7 @@ TQ4NC 是压缩路线。TQK8V4 目前没有在已验证 profile 中体现出优�
 - `fast`：高性能模式。量化 KV + MTP 走这个模式，但显存和质量风险更高。
 
 实验 profile 放在每个模型目录下，例如
-`profiles/qwen27b/experimental/fp8/`。launcher 默认隐藏实验路线；需要尝试时，
+`profiles/qwopus36-27b/experimental/fp8/`。launcher 默认隐藏实验路线；需要尝试时，
 把 Profile directory 指到该 experimental 子目录，或设置
 `PROFILE_INCLUDE_EXPERIMENTAL=1`。
 
