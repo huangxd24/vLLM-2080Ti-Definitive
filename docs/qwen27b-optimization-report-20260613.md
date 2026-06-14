@@ -186,6 +186,100 @@ MAX_BATCHED_TOKENS='4096'    # 加速 prefill chunking
 
 ---
 
+### 3.5 输出内容差异分析（v1.1 vs v1.2）
+
+尽管两次运行使用了相同的 prompt（"对比两个子模块，找出区别，写入 md 文件"），生成的报告在内容覆盖和组织方式上有显著差异。
+
+#### 3.5.1 基本对比
+
+| 维度 | v1.1（旧运行 EAGER） | v1.2（新运行 CUDAGraph） |
+|------|---------------------|------------------------|
+| Session 历史长度 | **14 轮**（5 个先前话题） | **4 轮**（2 个简短对话） |
+| 比较任务开始时的 API 序号 | **#8** | **#5** |
+| 工具调用策略 | **Hermes read_file + diff** | **纯 terminal（cat/ls/find）** |
+| 收集到的原始数据 | 20,238 chars（diff 输出） | 26,017 chars（文件内容） |
+| 最大 context | 55K tokens | 25K tokens |
+| 最终输出 tokens | 6,903 | 5,582 |
+| malformed tool_call | 5 次 | 0 次 |
+
+#### 3.5.2 工具调用策略差异（最大影响，~50%）
+
+这是最关键的区别。两次运行使用了**完全不同的工具组合**：
+
+**v1.1 的工具链**:
+```
+search_files → (Hermes 内置 read_file × 4) → diff 命令 × 5 轮 → write_file
+```
+- API #10 的 input 从 11K 跳到 35K（一次性加载了 4 个大文件到 context）
+- 然后用 **diff 命令**逐文件对比，产出 20,238 chars 的 diff 格式化输出
+- 模型看到的是：原始文件内容 + diff 格式化结果
+
+**v1.2 的工具链**:
+```
+search_files → terminal（ls）→ terminal（cat 目录结构）→ terminal（cat 单文件）
+→ terminal（diff）→ terminal（cat 大文件 26K chars）→ terminal（补充对比）→ write_file
+```
+- 全程用 **terminal 命令**，模型自己组合 `ls`、`cat`、`diff` 命令
+- 产出 26,017 chars 的文件原始内容
+- 模型看到的是：terminal 命令的输出（格式与 Hermes 原生工具不同）
+
+**影响**：
+- v1.1 同时持有原始文件 + diff 结果，信息密度更高 → 生成的报告更全面（覆盖 9 个文件，有时间线追踪）
+- v1.2 通过 terminal 逐步探索，信息是渐进式收集的 → 报告更聚焦代码块展示，但遗漏了 QTInterface.var
+
+#### 3.5.3 Session 历史积累差异（~25%）
+
+**v1.1 的 session 历史**：
+```
+#1 terminal(265 chars) → #2-#5 长对话(2269 tokens) → #6-#7 AS_Proj 目录浏览 → #8-#16 对比任务
+```
+- 5 个先前话题，积累了约 **8K tokens** 的历史
+- 对比任务开始时 context 已经是 9.8K，最终膨胀到 55K
+
+**v1.2 的 session 历史**：
+```
+#1 简单问候 → #2 "你能做什么" → #3-#4 AS_Proj 目录浏览 → #5-#12 对比任务
+```
+- 2 个简短先前话题，约 **1K tokens** 历史
+- 对比任务开始时 context 仅 6.4K，最终 25K
+
+**影响**：v1.1 的更长历史使模型有更强的"任务理解"（知道用户关心什么），生成时更详细。
+
+#### 3.5.4 LLM 固有随机性（~10%）
+
+即使 prompt 完全相同，LLM 的输出是概率性的（temperature > 0）。每次生成都在概率空间中采样，不同路径导致不同的工具调用策略和内容组织方式。
+
+#### 3.5.5 MTP Rejection Sampling 的额外随机性（~10%）
+
+MTP3 在每步生成 3 个 draft token，然后通过 rejection sampling 验证：
+- v1.1: acceptance rate 52-90%（波动大，位置 1 的拒绝率高达 48%）
+- v1.2: acceptance rate 50-83%（波动略小）
+
+**位置 1 拒绝率高 → 模型"第一直觉"被拒绝 → 被迫重新采样 → 走向不同的生成路径**。这种累积偏差在长生成任务中会放大。
+
+#### 3.5.6 Malformed Tool Call 的连锁效应（~5%）
+
+v1.1 有 5 次 JSON 格式错误，Hermes 自动修复后：
+- 修复后的 tool_call 可能与模型原意略有不同
+- 修复日志进入 context，消耗额外 tokens
+- 模型可能因修复后的工具结果与预期不符而调整后续策略
+
+这导致 v1.1 的工具调用链更长（9 次 vs 8 次），收集了更多 diff 数据，最终生成了更全面的报告。
+
+#### 3.5.7 差异原因总结
+
+| 因素 | 贡献度 | 说明 |
+|------|--------|------|
+| 工具调用策略差异 | **~50%** | read_file+diff vs 纯 terminal，信息密度不同 |
+| Session 历史积累 | **~25%** | 14 轮 vs 4 轮，上下文丰富度不同 |
+| LLM 固有随机性 | **~10%** | temperature 采样的概率性 |
+| MTP rejection sampling | **~10%** | 拒绝采样导致生成路径偏移 |
+| Malformed tool_call 连锁效应 | **~5%** | 5 次修复增加了额外调用轮次 |
+
+**核心结论**：输出差异的主要原因是工具调用策略不同（v1.1 使用 Hermes 原生 read_file 工具收集了更密集的 diff 数据），其次是 session 历史积累的差异。CUDAGraph 优化只影响速度，不影响生成质量。
+
+---
+
 ## 4. 提升来源拆解
 
 ### 4.1 Decode 速度提升（3-3.5x）

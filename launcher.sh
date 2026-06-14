@@ -20,7 +20,6 @@ banner() {
 ============================================================
  vLLM 2080 Ti Definitive Edition v$VERSION
  Service manager
- Author: github.com/weicj
 ============================================================
 EOF
 }

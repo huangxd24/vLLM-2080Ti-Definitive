@@ -15,7 +15,6 @@ banner() {
 ============================================================
  vLLM 2080 Ti Definitive Edition v$VERSION
  One-click source build
- Author: github.com/weicj
 ============================================================
 EOF
 }
