@@ -162,6 +162,137 @@ CUDA_VISIBLE_DEVICES=0,1 \
 Profile 只声明兼容模式，不再提供推荐启动模式。需要指定模式时，显式传
 `MODE=safe`、`MODE=normal` 或 `MODE=fast`；launcher 会根据 profile 做二次校验。
 
+### 本机已验证启动配置
+
+下面是这台双 2080 Ti 机器上当前主力、已实测启动成功的路线，忘了怎么启动时
+直接照抄即可（`./build.sh` 已跑过、`.venv` 已存在时无需重跑）。
+
+交互式（默认，在终端里直接运行）：
+
+```bash
+./launcher.sh
+```
+
+进入菜单后依次选：`1` checkpoint 目录 → `2` Profile 路径 → `4` 模式 →
+`5` 端口 → `8` 启动；停止选 `9`。
+
+非交互式一条命令（等价于上面这套配置）：
+
+```bash
+cd /home/david/work/vLLM-2080Ti-Definitive
+MODEL_DIR=/home/david/work/models/Qwopus3.6-27B-v2-FP8 \
+PROFILE=qwopus36-27b/user/qwen27b-fp8-fp16kv-64K-mtp3-text-only.env \
+MODE=safe PORT=8000 GPU_DEVICES=0,1 TP_SIZE=2 \
+bash ./launcher.sh --non-interactive
+```
+
+该路线的实际参数（以 profile 与 `--print-config` 输出为准，profile 文件名里的
+`64K` 只是命名，并非真实上下文长度）：
+
+| 项 | 值 |
+|---|---|
+| 权重 | Qwopus3.6-27B-v2-FP8（`QUANTIZATION=fp8`） |
+| KV 精度 | FP16/default（质量路线） |
+| 上下文 | `MAX_MODEL_LEN=48000` |
+| MTP | `MTP_K=3`（safe 模式 + FP16 KV，可用） |
+| 并发 | `MAX_NUM_SEQS=1`（极限单并发） |
+| GPU / TP | `0,1`，`TP_SIZE=2` |
+| 模式 | `safe` |
+| 工具调用 | `ENABLE_TOOL_CALLING=1`，`TOOL_CALL_PARSER=qwen3_xml` |
+| API | `http://127.0.0.1:8000/v1`（`SERVICE_SCOPE=local`） |
+
+启动过程说明：`launch_server` 会用 `nohup` 后台拉起 api_server，写入
+`run-logs/<served-name>.pid`，等待就绪（引擎超时 `VLLM_ENGINE_READY_TIMEOUT_S=1800`）
+并跑一次 smoke 测试，全部通过才打印 `START OK`。日志在
+`run-logs/vllm-<served-name>-<时间戳>.log`。
+
+验证与停止：
+
+```bash
+# 看是否存活 / 已加载模型
+curl -s http://127.0.0.1:8000/v1/models
+# 停止：交互菜单选 9，或直接 kill pid 文件里的进程
+cat run-logs/vllm-qwen27b-fp8-fp16kv-64K-mtp3-text-only-cu128.pid | xargs -r kill
+```
+
+> 注意：非交互模式不会自动读取历史 `run-logs/start-manager.state`，`MODEL_DIR`、
+> `GPU_DEVICES`、`TP_SIZE`、`MODE`、`PORT` 这些全局项需在命令里显式给出；
+> profile 文件本身只携带单条路线的参数。
+
+## 🤖 与 Hermes Agent 配合使用
+
+本仓库负责把模型推理服务跑起来，上层的 agentic 使用（工具调用、多轮编程
+任务）由 [Hermes Agent](https://hermes-agent.nousresearch.com)（Nous Research
+`hermes-agent`）承担。Hermes 是一个独立的 pip CLI，不是本仓库的一部分，它通过
+OpenAI 兼容接口消费本仓库启动的 vLLM。二者是“服务 / 客户端”关系。
+
+- 安装位置：conda 环境 `hermes`，可执行入口 `hermes`（`hermes-agent`）。
+- 配置主目录：`~/.hermes/`（`config.yaml` 模型/工具、`SOUL.md` 人格、
+  `sessions/`、`memories/`、`skills/` 等）。
+- `~/.hermes/bin/tirith` 是配套的 URL 安全网关（执行 shell 前做安全检查），
+  不是 agent 本体。
+
+### 启动顺序（两步）
+
+**第一步**：先按[本机已验证启动配置](#本机已验证启动配置)把 vLLM 跑起来，并确认
+服务名已加载：
+
+```bash
+curl -s http://127.0.0.1:8000/v1/models | grep -o '"id":"[^"]*"'
+# 预期输出："id":"qwen27b-fp8-fp16kv-64K-mtp3-text-only-cu128"
+```
+
+**第二步**：启动 Hermes。
+
+```bash
+conda activate hermes
+cd ~/.hermes
+hermes                       # 交互式 chat
+# 常用变体：
+hermes --tui                 # 终端 UI
+hermes chat -Q -q "你的问题"  # 一次性非交互（脚本用）
+hermes --resume <SESSION>    # 恢复历史会话
+hermes status                # 查看各组件状态
+```
+
+### 关键配置：服务名必须对齐
+
+Hermes 请求时会把 `config.yaml` 里的 `model.default` 作为模型名发给 vLLM，
+该名字必须等于 vLLM 实际加载的 `SERVED_NAME`，否则报 model-not-found。
+
+本机 `~/.hermes/config.yaml` 已对齐为当前 MTP3 路线（旧值以注释保留，便于回退）：
+
+```yaml
+model:
+  default: qwen27b-fp8-fp16kv-64K-mtp3-text-only-cu128
+  provider: custom
+  base_url: http://localhost:8000/v1
+  api_key: custom
+  context_length: 64000
+```
+
+- `base_url` 指向本仓库的 vLLM（默认 `:8000`）。
+- `context_length: 64000` 是一个“谎报值”：Hermes 有“模型上下文不得低于 64K”的
+  门槛检查，而 MTP3 路线真实 `MAX_MODEL_LEN=48000`（48K），所以需该 override
+  骗过门槛。实际可用上下文仍是 48K，Hermes 压缩阈值（0.3）保证在限制内安全
+  使用。不要把这个 64000 当成真实容量。
+- 若换了 profile（例如改用 int4 或其它路线）导致服务名变了，要么启动 hermes 时
+  用 `-m <新服务名>` 覆盖，要么改 `config.yaml` 的 `model.default`（并同步
+  `~/.hermes/CHANGELOG.md`）。
+
+### 验证链路
+
+```bash
+conda activate hermes && cd ~/.hermes
+hermes chat -Q -q "不要调用任何工具，直接用中文回复：连接成功"
+```
+
+能正常返回即说明 Hermes→vLLM 链路通。注意：本路线是极限单并发
+（`MAX_NUM_SEQS=1`），Hermes 与其它客户端会排队，不要并发高频请求。
+
+> 提醒：Hermes 的 `config.yaml` / `CHANGELOG.md` 改动不属于本仓库，但在
+> `~/.hermes` 这个 git 仓库里单独维护。
+
 ## 🧭 Profile 与推荐路线
 
 从 [Profile 导引](profiles/README.zh-CN.md) 开始选。Profile 按
@@ -260,18 +391,22 @@ fork，遵循 Apache-2.0 license。仓库保留上游项目结构，并加入面
   相关加速 kernel：这些都是已有开源加速工作，本项目将它们整合、适配并在
   目标硬件上验证。
 
+## 🧱 本机环境与构建备忘
 
-启动命令：
+这台机器的构建环境（`.venv` 由 `build.sh` 生成，launcher 运行时调用的就是
+`RUNTIME_ROOT/.venv/bin/python`）：
+
+```bash
 conda activate vllm2080ti
 export CUDA_HOME=/home/david/miniconda3/envs/vllm2080ti
 export TORCH_CUDA_ARCH_LIST=7.5
 export MAX_JOBS=8
 ./build.sh
+```
 
-export VLLM_ENGINE_READY_TIMEOUT_S=1800
-export ENABLE_TOOL_CALLING=1
-export TOOL_CALL_PARSER=qwen3_xml
-export ENFORCE_EAGER=1
-export GPU_UTIL=0.9034
-./launcher.sh
+启动不再需要手动 export 路线参数：`ENFORCE_EAGER`、`GPU_UTIL`、`MTP_K`、KV
+精度、`VLLM_ENGINE_READY_TIMEOUT_S`、工具调用解析器等都由所选 profile 决定，
+非交互启动时 profile 会覆盖同名环境变量（旧笔记里的 `ENFORCE_EAGER=1`、
+`GPU_UTIL=0.9034` 与当前 profile 的 `ENFORCE_EAGER=0`、`GPU_UTIL=0.88` 不一致，
+已作废）。完整启动命令见上文[本机已验证启动配置](#本机已验证启动配置)。
 

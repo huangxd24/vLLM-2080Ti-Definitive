@@ -164,6 +164,67 @@ Profiles declare compatible modes, not a recommended launch mode. Set
 `MODE=safe`, `MODE=normal`, or `MODE=fast` explicitly when you want a specific
 mode; the launcher validates that choice against the profile.
 
+### Validated launch config on this machine
+
+This is the current main route on this dual 2080 Ti box, verified to start
+successfully. Copy it directly if you forget how to launch (no need to rerun
+`./build.sh` when `.venv` already exists).
+
+Interactive (default, run in a terminal):
+
+```bash
+./launcher.sh
+```
+
+In the menu: `1` checkpoint dir -> `2` profile path -> `4` mode ->
+`5` port -> `8` start; `9` stops the service.
+
+Single non-interactive command (equivalent to the config above):
+
+```bash
+cd /home/david/work/vLLM-2080Ti-Definitive
+MODEL_DIR=/home/david/work/models/Qwopus3.6-27B-v2-FP8 \
+PROFILE=qwopus36-27b/user/qwen27b-fp8-fp16kv-64K-mtp3-text-only.env \
+MODE=safe PORT=8000 GPU_DEVICES=0,1 TP_SIZE=2 \
+bash ./launcher.sh --non-interactive
+```
+
+Actual parameters for this route (trust the profile and `--print-config`
+output; the `64K` in the profile filename is only a name, not the real context
+length):
+
+| Field | Value |
+|---|---|
+| Weights | Qwopus3.6-27B-v2-FP8 (`QUANTIZATION=fp8`) |
+| KV precision | FP16/default (quality route) |
+| Context | `MAX_MODEL_LEN=48000` |
+| MTP | `MTP_K=3` (safe mode + FP16 KV, allowed) |
+| Concurrency | `MAX_NUM_SEQS=1` (single-stream) |
+| GPU / TP | `0,1`, `TP_SIZE=2` |
+| Mode | `safe` |
+| Tool calling | `ENABLE_TOOL_CALLING=1`, `TOOL_CALL_PARSER=qwen3_xml` |
+| API | `http://127.0.0.1:8000/v1` (`SERVICE_SCOPE=local`) |
+
+Launch behavior: `launch_server` starts api_server in the background via
+`nohup`, writes `run-logs/<served-name>.pid`, waits for readiness (engine
+timeout `VLLM_ENGINE_READY_TIMEOUT_S=1800`), and runs one smoke test before
+printing `START OK`. The log lives at
+`run-logs/vllm-<served-name>-<timestamp>.log`.
+
+Verify and stop:
+
+```bash
+# check liveness / loaded model
+curl -s http://127.0.0.1:8000/v1/models
+# stop: pick 9 in the interactive menu, or kill the pid file process
+cat run-logs/vllm-qwen27b-fp8-fp16kv-64K-mtp3-text-only-cu128.pid | xargs -r kill
+```
+
+> Note: non-interactive mode does not auto-load the previous
+> `run-logs/start-manager.state`. Global items such as `MODEL_DIR`,
+> `GPU_DEVICES`, `TP_SIZE`, `MODE`, and `PORT` must be passed explicitly on the
+> command line; the profile file only carries the per-route parameters.
+
 ## 🧭 Profiles
 
 Start from [Profile Guide](profiles/README.md). Profiles are organized as
